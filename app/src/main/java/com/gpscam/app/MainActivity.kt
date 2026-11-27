@@ -118,8 +118,9 @@ fun GpsCameraScreen() {
     var mapVersion by remember { mutableIntStateOf(0) }
     var showSettings by remember { mutableStateOf(false) }
 
-    // Aspect ratio & last saved photo viewer
+    // Aspect ratio, Photo quality & last saved photo viewer
     var aspectRatio by remember { mutableStateOf(prefs.getString("aspect_ratio", "4:3") ?: "4:3") }
+    var photoQuality by remember { mutableStateOf(prefs.getString("photo_quality", "Medium") ?: "Medium") }
     var lastSavedUri by remember { mutableStateOf<Uri?>(null) }
     var lastSavedThumb by remember { mutableStateOf<ImageBitmap?>(null) }
 
@@ -193,7 +194,8 @@ fun GpsCameraScreen() {
                         tempFile,
                         StampData(activeTitle, activeAddress, activeLat, activeLng, note),
                         mapThumbFile,
-                        aspectRatio = null
+                        aspectRatio = null,
+                        qualityMode = photoQuality
                     )
                 } else null
 
@@ -201,7 +203,7 @@ fun GpsCameraScreen() {
                     isSaving = false
                     if (savedUri != null) {
                         loadThumbnail(savedUri)
-                        Toast.makeText(context, "Geo-tagged photo saved", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Geo-tagged photo saved ($photoQuality)", Toast.LENGTH_SHORT).show()
                     } else {
                         Toast.makeText(context, "Failed to stamp photo", Toast.LENGTH_SHORT).show()
                     }
@@ -307,7 +309,7 @@ fun GpsCameraScreen() {
 
         // Top Bar
         Row(
-            Modifier.fillMaxWidth().statusBarsPadding().padding(16.dp),
+            Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 12.dp, vertical = 14.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -318,26 +320,52 @@ fun GpsCameraScreen() {
                 Icon(if (flashOn) Icons.Default.FlashOn else Icons.Default.FlashOff, "Flash", tint = Color.White)
             }
 
-            // Aspect Ratio Toggle Pill
-            Box(
-                Modifier
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(Color(0xCC0F172A))
-                    .border(1.dp, Color(0xFF38BDF8), RoundedCornerShape(20.dp))
-                    .clickable {
-                        aspectRatio = when (aspectRatio) {
-                            "4:3" -> "16:9"
-                            "16:9" -> "1:1"
-                            else -> "4:3"
+            // Center Pills: Aspect Ratio + Quality
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Color(0xCC0F172A))
+                        .border(1.dp, Color(0xFF38BDF8), RoundedCornerShape(20.dp))
+                        .clickable {
+                            aspectRatio = when (aspectRatio) {
+                                "4:3" -> "16:9"
+                                "16:9" -> "1:1"
+                                else -> "4:3"
+                            }
+                            prefs.edit().putString("aspect_ratio", aspectRatio).apply()
                         }
-                        prefs.edit().putString("aspect_ratio", aspectRatio).apply()
-                    }
-                    .padding(horizontal = 14.dp, vertical = 7.dp)
-            ) {
-                Text(aspectRatio, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(aspectRatio, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+
+                val qualityShort = when (photoQuality) {
+                    "Low" -> "≤1MB"
+                    "High" -> "≤10MB"
+                    else -> "≤5MB"
+                }
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Color(0xCC0F172A))
+                        .border(1.dp, Color(0xFF38BDF8), RoundedCornerShape(20.dp))
+                        .clickable {
+                            photoQuality = when (photoQuality) {
+                                "Low" -> "Medium"
+                                "Medium" -> "High"
+                                else -> "Low"
+                            }
+                            prefs.edit().putString("photo_quality", photoQuality).apply()
+                            Toast.makeText(context, "Quality: $photoQuality", Toast.LENGTH_SHORT).show()
+                        }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(qualityShort, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 IconButton(
                     onClick = {
                         lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK)
@@ -445,13 +473,14 @@ fun GpsCameraScreen() {
                                                 tempFile,
                                                 StampData(activeTitle, activeAddress, activeLat, activeLng, note),
                                                 mapThumbFile,
-                                                aspectRatio = aspectRatio
+                                                aspectRatio = aspectRatio,
+                                                qualityMode = photoQuality
                                             )
                                             withContext(Dispatchers.Main) {
                                                 isSaving = false
                                                 if (savedUri != null) {
                                                     loadThumbnail(savedUri)
-                                                    Toast.makeText(context, "Saved to Pictures/GPSCamera", Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(context, "Saved ($photoQuality)", Toast.LENGTH_SHORT).show()
                                                 } else {
                                                     Toast.makeText(context, "Save failed", Toast.LENGTH_SHORT).show()
                                                 }
@@ -518,6 +547,27 @@ fun GpsCameraScreen() {
             title = { Text("Location & Stamp Settings", color = Color.White) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Photo Quality", color = Color(0xFFCBD5E1), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                        listOf("Low" to "Low\n≤1MB", "Medium" to "Med\n≤5MB", "High" to "High\n≤10MB").forEach { (key, label) ->
+                            val selected = photoQuality == key
+                            OutlinedButton(
+                                onClick = {
+                                    photoQuality = key
+                                    prefs.edit().putString("photo_quality", key).apply()
+                                },
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = if (selected) Color(0xFF38BDF8) else Color.Transparent,
+                                    contentColor = if (selected) Color(0xFF020617) else Color.White
+                                ),
+                                contentPadding = PaddingValues(vertical = 6.dp, horizontal = 4.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(label, fontSize = 11.sp, lineHeight = 13.sp)
+                            }
+                        }
+                    }
+
                     OutlinedTextField(
                         value = title,
                         onValueChange = { title = it },
@@ -623,6 +673,7 @@ fun GpsCameraScreen() {
                         .putString("title", title)
                         .putString("address", fixedAddress)
                         .putString("note", note)
+                        .putString("photo_quality", photoQuality)
                     if (lockedLat != null && lockedLng != null) {
                         editor.putString("locked_lat", lockedLat.toString())
                         editor.putString("locked_lng", lockedLng.toString())

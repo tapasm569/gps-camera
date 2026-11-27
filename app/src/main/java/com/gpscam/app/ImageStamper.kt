@@ -11,6 +11,7 @@ import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
 import androidx.exifinterface.media.ExifInterface
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
@@ -31,7 +32,8 @@ object ImageStamper {
         tempFile: File,
         data: StampData,
         mapThumbFile: File?,
-        aspectRatio: String? = null
+        aspectRatio: String? = null,
+        qualityMode: String = "Medium"
     ): Uri? {
         val rawBitmap = BitmapFactory.decodeFile(tempFile.absolutePath) ?: return null
         val rotated = rotateIfRequired(rawBitmap, tempFile.absolutePath)
@@ -44,7 +46,7 @@ object ImageStamper {
         cropped.recycle()
 
         drawOverlay(mutable, data, mapThumbFile)
-        val savedUri = saveToGallery(context, mutable)
+        val savedUri = saveToGallery(context, mutable, qualityMode)
         mutable.recycle()
         tempFile.delete()
         return savedUri
@@ -194,7 +196,45 @@ object ImageStamper {
         return Rect(x, y, x + size, y + size)
     }
 
-    private fun saveToGallery(context: Context, bitmap: Bitmap): Uri? {
+    private fun compressToLimit(source: Bitmap, qualityMode: String): ByteArray {
+        val maxBytes = when (qualityMode) {
+            "Low" -> 1 * 1024 * 1024
+            "High" -> 10 * 1024 * 1024
+            else -> 5 * 1024 * 1024
+        }
+        var jpegQuality = when (qualityMode) {
+            "Low" -> 78
+            "High" -> 98
+            else -> 90
+        }
+
+        var working = source
+        val baos = ByteArrayOutputStream()
+
+        while (true) {
+            baos.reset()
+            working.compress(Bitmap.CompressFormat.JPEG, jpegQuality, baos)
+            if (baos.size() <= maxBytes) break
+
+            if (jpegQuality > 30) {
+                jpegQuality -= 12
+            } else {
+                val nextW = (working.width * 0.8f).roundToInt().coerceAtLeast(480)
+                val nextH = (working.height * 0.8f).roundToInt().coerceAtLeast(480)
+                if (nextW == working.width && nextH == working.height) break
+                val scaled = Bitmap.createScaledBitmap(working, nextW, nextH, true)
+                if (working !== source) working.recycle()
+                working = scaled
+                jpegQuality = 75
+            }
+        }
+
+        if (working !== source) working.recycle()
+        return baos.toByteArray()
+    }
+
+    private fun saveToGallery(context: Context, bitmap: Bitmap, qualityMode: String): Uri? {
+        val jpegBytes = compressToLimit(bitmap, qualityMode)
         val fileName = "GPS_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.jpg"
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
@@ -208,7 +248,7 @@ object ImageStamper {
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return null
         return try {
             resolver.openOutputStream(uri)?.use { out ->
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)
+                out.write(jpegBytes)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 values.clear()
