@@ -3,6 +3,7 @@ package com.gpscam.app
 import android.content.ContentValues
 import android.content.Context
 import android.graphics.*
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -13,6 +14,7 @@ import androidx.exifinterface.media.ExifInterface
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.roundToInt
 
 data class StampData(
     val title: String,
@@ -24,19 +26,55 @@ data class StampData(
 
 object ImageStamper {
 
-    fun stampAndSave(context: Context, tempFile: File, data: StampData, mapThumbFile: File?): Boolean {
-        val rawBitmap = BitmapFactory.decodeFile(tempFile.absolutePath) ?: return false
+    fun stampAndSave(
+        context: Context,
+        tempFile: File,
+        data: StampData,
+        mapThumbFile: File?,
+        aspectRatio: String? = null
+    ): Uri? {
+        val rawBitmap = BitmapFactory.decodeFile(tempFile.absolutePath) ?: return null
         val rotated = rotateIfRequired(rawBitmap, tempFile.absolutePath)
         if (rotated != rawBitmap) rawBitmap.recycle()
 
-        val mutable = rotated.copy(Bitmap.Config.ARGB_8888, true)
-        rotated.recycle()
+        val cropped = cropToAspectRatio(rotated, aspectRatio)
+        if (cropped != rotated) rotated.recycle()
+
+        val mutable = cropped.copy(Bitmap.Config.ARGB_8888, true)
+        cropped.recycle()
 
         drawOverlay(mutable, data, mapThumbFile)
-        val saved = saveToGallery(context, mutable)
+        val savedUri = saveToGallery(context, mutable)
         mutable.recycle()
         tempFile.delete()
-        return saved
+        return savedUri
+    }
+
+    private fun cropToAspectRatio(bitmap: Bitmap, ratio: String?): Bitmap {
+        if (ratio == null) return bitmap
+        val w = bitmap.width
+        val h = bitmap.height
+        val target = when (ratio) {
+            "1:1" -> 1f
+            "4:3" -> if (h >= w) 3f / 4f else 4f / 3f
+            "16:9" -> if (h >= w) 9f / 16f else 16f / 9f
+            else -> return bitmap
+        }
+        val current = w.toFloat() / h.toFloat()
+        if (kotlin.math.abs(current - target) < 0.02f) return bitmap
+
+        val newW: Int
+        val newH: Int
+        if (current > target) {
+            newH = h
+            newW = (h * target).roundToInt().coerceAtMost(w)
+        } else {
+            newW = w
+            newH = (w / target).roundToInt().coerceAtMost(h)
+        }
+        val x = (w - newW) / 2
+        val y = (h - newH) / 2
+        return Bitmap.createBitmap(bitmap, x, y, newW, newH)
     }
 
     private fun rotateIfRequired(bitmap: Bitmap, path: String): Bitmap {
@@ -91,7 +129,6 @@ object ImageStamper {
             setShadowLayer(2f, 1f, 1f, Color.BLACK)
         }
 
-        // 1. Measure text first
         val staticLayout = StaticLayout.Builder
             .obtain(lines, 0, lines.length, textPaint, textWidth)
             .setAlignment(Layout.Alignment.ALIGN_NORMAL)
@@ -99,13 +136,11 @@ object ImageStamper {
             .setMaxLines(12)
             .build()
 
-        // 2. Auto-adjust card height to fit text or map (whichever is taller)
         val contentHeight = maxOf(mapSize, staticLayout.height.toFloat())
         val cardHeight = contentHeight + (pad * 2)
         val cardTop = h - cardHeight - margin
         val cardRect = RectF(margin, cardTop, w - margin, h - margin)
 
-        // 3. Draw dark slate translucent card
         val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.argb(215, 15, 23, 42)
             style = Paint.Style.FILL
@@ -118,7 +153,6 @@ object ImageStamper {
         canvas.drawRoundRect(cardRect, cornerRadius, cornerRadius, bgPaint)
         canvas.drawRoundRect(cardRect, cornerRadius, cornerRadius, borderPaint)
 
-        // 4. Draw map thumbnail vertically centered on the left
         val mapTop = cardRect.top + (cardHeight - mapSize) / 2f
         val mapRect = RectF(cardRect.left + pad, mapTop, cardRect.left + pad + mapSize, mapTop + mapSize)
 
@@ -146,7 +180,6 @@ object ImageStamper {
             canvas.drawText("MAP", mapRect.centerX(), mapRect.centerY() + labelPaint.textSize / 3f, labelPaint)
         }
 
-        // 5. Draw text block vertically centered on the right
         val textTop = cardRect.top + (cardHeight - staticLayout.height) / 2f
         canvas.save()
         canvas.translate(textLeft, textTop)
@@ -161,7 +194,7 @@ object ImageStamper {
         return Rect(x, y, x + size, y + size)
     }
 
-    private fun saveToGallery(context: Context, bitmap: Bitmap): Boolean {
+    private fun saveToGallery(context: Context, bitmap: Bitmap): Uri? {
         val fileName = "GPS_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.jpg"
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
@@ -172,7 +205,7 @@ object ImageStamper {
             }
         }
         val resolver = context.contentResolver
-        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return false
+        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return null
         return try {
             resolver.openOutputStream(uri)?.use { out ->
                 bitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)
@@ -182,9 +215,9 @@ object ImageStamper {
                 values.put(MediaStore.Images.Media.IS_PENDING, 0)
                 resolver.update(uri, values, null, null)
             }
-            true
+            uri
         } catch (e: Exception) {
-            false
+            null
         }
     }
 }

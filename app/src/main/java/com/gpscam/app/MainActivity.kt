@@ -3,6 +3,7 @@ package com.gpscam.app
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.location.Location
@@ -32,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -116,6 +118,11 @@ fun GpsCameraScreen() {
     var mapVersion by remember { mutableIntStateOf(0) }
     var showSettings by remember { mutableStateOf(false) }
 
+    // Aspect ratio & last saved photo viewer
+    var aspectRatio by remember { mutableStateOf(prefs.getString("aspect_ratio", "4:3") ?: "4:3") }
+    var lastSavedUri by remember { mutableStateOf<Uri?>(null) }
+    var lastSavedThumb by remember { mutableStateOf<ImageBitmap?>(null) }
+
     val activeLat = lockedLat ?: liveLat
     val activeLng = lockedLng ?: liveLng
     val activeTitle = title.ifBlank { autoTitle }
@@ -127,6 +134,21 @@ fun GpsCameraScreen() {
     var isSaving by remember { mutableStateOf(false) }
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     val previewView = remember { PreviewView(context) }
+
+    fun loadThumbnail(uri: Uri) {
+        scope.launch(Dispatchers.IO) {
+            val bmp = try {
+                val opts = BitmapFactory.Options().apply { inSampleSize = 8 }
+                context.contentResolver.openInputStream(uri)?.use {
+                    BitmapFactory.decodeStream(it, null, opts)
+                }?.asImageBitmap()
+            } catch (_: Exception) { null }
+            withContext(Dispatchers.Main) {
+                lastSavedUri = uri
+                lastSavedThumb = bmp
+            }
+        }
+    }
 
     // Live clock
     var currentTime by remember { mutableStateOf("") }
@@ -165,22 +187,24 @@ fun GpsCameraScreen() {
                     false
                 }
 
-                val ok = if (copied) {
+                val savedUri = if (copied) {
                     ImageStamper.stampAndSave(
                         context,
                         tempFile,
                         StampData(activeTitle, activeAddress, activeLat, activeLng, note),
-                        mapThumbFile
+                        mapThumbFile,
+                        aspectRatio = null
                     )
-                } else false
+                } else null
 
                 withContext(Dispatchers.Main) {
                     isSaving = false
-                    Toast.makeText(
-                        context,
-                        if (ok) "Geo-tagged photo saved to Pictures/GPSCamera" else "Failed to stamp photo",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    if (savedUri != null) {
+                        loadThumbnail(savedUri)
+                        Toast.makeText(context, "Geo-tagged photo saved", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "Failed to stamp photo", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
         }
@@ -229,13 +253,21 @@ fun GpsCameraScreen() {
     }
 
     // Bind CameraX
-    LaunchedEffect(hasPermissions, lensFacing, flashOn) {
+    LaunchedEffect(hasPermissions, lensFacing, flashOn, aspectRatio) {
         if (!hasPermissions) return@LaunchedEffect
         val provider = ProcessCameraProvider.getInstance(context).get()
-        val preview = Preview.Builder().build().also {
-            it.setSurfaceProvider(previewView.surfaceProvider)
-        }
+        val camRatio = if (aspectRatio == "16:9") AspectRatio.RATIO_16_9 else AspectRatio.RATIO_4_3
+
+        @Suppress("DEPRECATION")
+        val preview = Preview.Builder()
+            .setTargetAspectRatio(camRatio)
+            .build().also {
+                it.setSurfaceProvider(previewView.surfaceProvider)
+            }
+
+        @Suppress("DEPRECATION")
         val capture = ImageCapture.Builder()
+            .setTargetAspectRatio(camRatio)
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
             .setFlashMode(if (flashOn) ImageCapture.FLASH_MODE_ON else ImageCapture.FLASH_MODE_OFF)
             .build()
@@ -265,12 +297,19 @@ fun GpsCameraScreen() {
     }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
+        // Camera Preview
+        val previewModifier = when (aspectRatio) {
+            "1:1" -> Modifier.fillMaxWidth().aspectRatio(1f).align(Alignment.Center)
+            "4:3" -> Modifier.fillMaxWidth().aspectRatio(3f / 4f).align(Alignment.Center)
+            else -> Modifier.fillMaxSize()
+        }
+        AndroidView(factory = { previewView }, modifier = previewModifier)
 
         // Top Bar
         Row(
             Modifier.fillMaxWidth().statusBarsPadding().padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(
                 onClick = { flashOn = !flashOn },
@@ -278,6 +317,26 @@ fun GpsCameraScreen() {
             ) {
                 Icon(if (flashOn) Icons.Default.FlashOn else Icons.Default.FlashOff, "Flash", tint = Color.White)
             }
+
+            // Aspect Ratio Toggle Pill
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color(0xCC0F172A))
+                    .border(1.dp, Color(0xFF38BDF8), RoundedCornerShape(20.dp))
+                    .clickable {
+                        aspectRatio = when (aspectRatio) {
+                            "4:3" -> "16:9"
+                            "16:9" -> "1:1"
+                            else -> "4:3"
+                        }
+                        prefs.edit().putString("aspect_ratio", aspectRatio).apply()
+                    }
+                    .padding(horizontal = 14.dp, vertical = 7.dp)
+            ) {
+                Text(aspectRatio, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            }
+
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 IconButton(
                     onClick = {
@@ -347,7 +406,7 @@ fun GpsCameraScreen() {
 
             Spacer(Modifier.height(18.dp))
 
-            // Controls Row: Gallery Upload + Shutter
+            // Controls Row: Gallery Upload (Left) + Shutter (Center) + View Last Saved Photo (Right)
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 IconButton(
                     enabled = !isSaving,
@@ -381,19 +440,21 @@ fun GpsCameraScreen() {
                                 object : ImageCapture.OnImageSavedCallback {
                                     override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                                         scope.launch(Dispatchers.IO) {
-                                            val ok = ImageStamper.stampAndSave(
+                                            val savedUri = ImageStamper.stampAndSave(
                                                 context,
                                                 tempFile,
                                                 StampData(activeTitle, activeAddress, activeLat, activeLng, note),
-                                                mapThumbFile
+                                                mapThumbFile,
+                                                aspectRatio = aspectRatio
                                             )
                                             withContext(Dispatchers.Main) {
                                                 isSaving = false
-                                                Toast.makeText(
-                                                    context,
-                                                    if (ok) "Saved to Pictures/GPSCamera" else "Save failed",
-                                                    Toast.LENGTH_SHORT
-                                                ).show()
+                                                if (savedUri != null) {
+                                                    loadThumbnail(savedUri)
+                                                    Toast.makeText(context, "Saved to Pictures/GPSCamera", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    Toast.makeText(context, "Save failed", Toast.LENGTH_SHORT).show()
+                                                }
                                             }
                                         }
                                     }
@@ -405,6 +466,42 @@ fun GpsCameraScreen() {
                             )
                         }
                 )
+
+                // View Last Saved Photo Button (Right)
+                Box(
+                    Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 24.dp)
+                        .size(52.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xCC0F172A))
+                        .border(1.5.dp, if (lastSavedUri != null) Color.White else Color(0x6694A3B8), CircleShape)
+                        .clickable(enabled = lastSavedUri != null) {
+                            lastSavedUri?.let { uri ->
+                                try {
+                                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                                        setDataAndType(uri, "image/jpeg")
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    }
+                                    context.startActivity(intent)
+                                } catch (_: Exception) {
+                                    Toast.makeText(context, "No gallery app found", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (lastSavedThumb != null) {
+                        Image(
+                            bitmap = lastSavedThumb!!,
+                            contentDescription = "View Last Photo",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Icon(Icons.Default.Image, "Last Photo", tint = Color(0xFF94A3B8))
+                    }
+                }
             }
         }
     }
