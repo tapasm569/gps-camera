@@ -263,8 +263,7 @@ fun GpsCameraScreen() {
                     if (mapBitmap != null) {
                         Image(mapBitmap, "Map", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                     } else {
-                        Text("TAP
-MAP", color = Color(0xFF94A3B8), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("TAP\nMAP", color = Color(0xFF94A3B8), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
                 Spacer(Modifier.width(10.dp))

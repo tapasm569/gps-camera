@@ -122,8 +122,7 @@ object ImageStamper {
             appendLine(data.address.ifBlank { "Location not set" })
             appendLine(coords)
             append(timestamp)
-            if (data.note.isNotBlank()) append("
-${data.note}")
+            if (data.note.isNotBlank()) append("\n${data.note}")
         }
 
         val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
