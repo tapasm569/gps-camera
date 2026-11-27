@@ -45,7 +45,7 @@ object ImageStamper {
         val mutable = cropped.copy(Bitmap.Config.ARGB_8888, true)
         cropped.recycle()
 
-        drawOverlay(mutable, data, mapThumbFile)
+        drawOverlay(context, mutable, data, mapThumbFile)
         val savedUri = saveToGallery(context, mutable, qualityMode)
         mutable.recycle()
         tempFile.delete()
@@ -95,105 +95,174 @@ object ImageStamper {
         return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
     }
 
-    private fun drawOverlay(bitmap: Bitmap, data: StampData, mapThumbFile: File?) {
+    private fun drawOverlay(context: Context, bitmap: Bitmap, data: StampData, mapThumbFile: File?) {
         val canvas = Canvas(bitmap)
         val w = bitmap.width.toFloat()
         val h = bitmap.height.toFloat()
         val base = minOf(w, h)
 
         val margin = w * 0.03f
-        val pad = base * 0.025f
-        val mapSize = base * 0.22f
-        val cornerRadius = base * 0.025f
+        val gap = w * 0.02f
+        val pad = base * 0.026f
+        val mapWidth = w * 0.26f
+        val cornerRadius = base * 0.018f
 
-        val textLeft = margin + pad + mapSize + pad
-        val textWidth = (w - margin - pad - textLeft).toInt().coerceAtLeast(100)
+        val textBoxLeft = margin + mapWidth + gap
+        val textBoxRight = w - margin
+        val textWidth = (textBoxRight - textBoxLeft - pad * 2).toInt().coerceAtLeast(100)
 
-        val timestamp = SimpleDateFormat("dd/MM/yyyy hh:mm:ss a 'GMT'XXX", Locale.getDefault()).format(Date())
-        val coords = if (data.latitude != null && data.longitude != null) {
-            String.format(Locale.US, "Lat %.6f°  Long %.6f°", data.latitude, data.longitude)
-        } else {
-            "Lat --  Long --"
+        // Larger Header Paint (~1.6x body)
+        val headerPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = base * 0.044f
+            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
+            setShadowLayer(2f, 1f, 1f, Color.BLACK)
         }
 
-        val lines = buildString {
-            if (data.title.isNotBlank()) appendLine(data.title)
+        // Body Paint
+        val bodyPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = base * 0.027f
+            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
+            setShadowLayer(2f, 1f, 1f, Color.BLACK)
+        }
+
+        val headerText = data.title.trim()
+        val headerLayout = if (headerText.isNotBlank()) {
+            StaticLayout.Builder
+                .obtain(headerText, 0, headerText.length, headerPaint, textWidth)
+                .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+                .setLineSpacing(base * 0.004f, 1.05f)
+                .setMaxLines(3)
+                .build()
+        } else null
+
+        val timestamp = SimpleDateFormat("EEEE, dd/MM/yyyy hh:mm a 'GMT' XXX", Locale.getDefault()).format(Date())
+        val coords = if (data.latitude != null && data.longitude != null) {
+            String.format(Locale.US, "Lat %.6f° Long %.6f°", data.latitude, data.longitude)
+        } else {
+            "Lat -- Long --"
+        }
+
+        val bodyText = buildString {
             appendLine(data.address.ifBlank { "Location not set" })
             appendLine(coords)
             append(timestamp)
             if (data.note.isNotBlank()) append("\n${data.note}")
         }
 
-        val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            textSize = base * 0.030f
-            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
-            setShadowLayer(2f, 1f, 1f, Color.BLACK)
-        }
-
-        val staticLayout = StaticLayout.Builder
-            .obtain(lines, 0, lines.length, textPaint, textWidth)
+        val bodyLayout = StaticLayout.Builder
+            .obtain(bodyText, 0, bodyText.length, bodyPaint, textWidth)
             .setAlignment(Layout.Alignment.ALIGN_NORMAL)
-            .setLineSpacing(base * 0.006f, 1.05f)
-            .setMaxLines(12)
+            .setLineSpacing(base * 0.006f, 1.08f)
+            .setMaxLines(10)
             .build()
 
-        val contentHeight = maxOf(mapSize, staticLayout.height.toFloat())
-        val cardHeight = contentHeight + (pad * 2)
-        val cardTop = h - cardHeight - margin
-        val cardRect = RectF(margin, cardTop, w - margin, h - margin)
+        val headerBodyGap = if (headerLayout != null) base * 0.012f else 0f
+        val totalTextHeight = (headerLayout?.height ?: 0) + headerBodyGap + bodyLayout.height
+        val boxHeight = maxOf(mapWidth, totalTextHeight + pad * 2)
+        val boxTop = h - boxHeight - margin
+        val boxBottom = h - margin
 
         val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(215, 15, 23, 42)
+            color = Color.argb(185, 10, 14, 22)
             style = Paint.Style.FILL
         }
-        val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(140, 100, 116, 139)
-            style = Paint.Style.STROKE
-            strokeWidth = base * 0.003f
-        }
-        canvas.drawRoundRect(cardRect, cornerRadius, cornerRadius, bgPaint)
-        canvas.drawRoundRect(cardRect, cornerRadius, cornerRadius, borderPaint)
 
-        val mapTop = cardRect.top + (cardHeight - mapSize) / 2f
-        val mapRect = RectF(cardRect.left + pad, mapTop, cardRect.left + pad + mapSize, mapTop + mapSize)
-
+        // 1. Draw standalone Map Box on the left
+        val mapRect = RectF(margin, boxTop, margin + mapWidth, boxBottom)
         val mapBitmap = if (mapThumbFile != null && mapThumbFile.exists()) {
             BitmapFactory.decodeFile(mapThumbFile.absolutePath)
         } else null
 
         if (mapBitmap != null) {
             val saveCount = canvas.save()
-            val clipPath = Path().apply { addRoundRect(mapRect, cornerRadius * 0.6f, cornerRadius * 0.6f, Path.Direction.CW) }
+            val clipPath = Path().apply { addRoundRect(mapRect, cornerRadius, cornerRadius, Path.Direction.CW) }
             canvas.clipPath(clipPath)
-            val src = centerCropRect(mapBitmap.width, mapBitmap.height)
+            val src = centerCropRect(mapBitmap.width, mapBitmap.height, mapRect.width(), mapRect.height())
             canvas.drawBitmap(mapBitmap, src, mapRect, Paint(Paint.FILTER_BITMAP_FLAG))
             canvas.restoreToCount(saveCount)
             mapBitmap.recycle()
         } else {
-            val placeholderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(30, 41, 59) }
-            canvas.drawRoundRect(mapRect, cornerRadius * 0.6f, cornerRadius * 0.6f, placeholderPaint)
+            canvas.drawRoundRect(mapRect, cornerRadius, cornerRadius, bgPaint)
             val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = Color.rgb(148, 163, 184)
-                textSize = mapSize * 0.18f
+                textSize = mapWidth * 0.16f
                 textAlign = Paint.Align.CENTER
                 typeface = Typeface.DEFAULT_BOLD
             }
             canvas.drawText("MAP", mapRect.centerX(), mapRect.centerY() + labelPaint.textSize / 3f, labelPaint)
         }
 
-        val textTop = cardRect.top + (cardHeight - staticLayout.height) / 2f
+        // 2. Draw App Logo + App Name Badge on top-right of the Text Box
+        val appName = "GPS Camera"
+        val badgeTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = base * 0.025f
+            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
+        }
+        val badgePadH = base * 0.018f
+        val badgePadV = base * 0.010f
+        val iconSize = base * 0.032f
+        val iconGap = base * 0.012f
+        val badgeTextWidth = badgeTextPaint.measureText(appName)
+        val badgeWidth = badgePadH + iconSize + iconGap + badgeTextWidth + badgePadH
+        val badgeHeight = iconSize + badgePadV * 2
+        val badgeRect = RectF(textBoxRight - badgeWidth, boxTop - badgeHeight, textBoxRight, boxTop + cornerRadius)
+
+        canvas.drawRoundRect(badgeRect, cornerRadius * 0.8f, cornerRadius * 0.8f, bgPaint)
+
+        val appIcon = BitmapFactory.decodeResource(context.resources, R.drawable.ic_launcher)
+        if (appIcon != null) {
+            val iconRect = RectF(
+                badgeRect.left + badgePadH,
+                badgeRect.top + badgePadV,
+                badgeRect.left + badgePadH + iconSize,
+                badgeRect.top + badgePadV + iconSize
+            )
+            val saveCount = canvas.save()
+            val iconClip = Path().apply { addRoundRect(iconRect, iconSize * 0.2f, iconSize * 0.2f, Path.Direction.CW) }
+            canvas.clipPath(iconClip)
+            canvas.drawBitmap(appIcon, null, iconRect, Paint(Paint.FILTER_BITMAP_FLAG))
+            canvas.restoreToCount(saveCount)
+            appIcon.recycle()
+        }
+
+        val fm = badgeTextPaint.fontMetrics
+        val badgeTextY = badgeRect.top + badgePadV + iconSize / 2f - (fm.ascent + fm.descent) / 2f
+        canvas.drawText(appName, badgeRect.left + badgePadH + iconSize + iconGap, badgeTextY, badgeTextPaint)
+
+        // 3. Draw Text Box on the right
+        val textBoxRect = RectF(textBoxLeft, boxTop, textBoxRight, boxBottom)
+        canvas.drawRoundRect(textBoxRect, cornerRadius, cornerRadius, bgPaint)
+
+        // Draw Header & Body vertically centered
+        var currentY = boxTop + (boxHeight - totalTextHeight) / 2f
+        if (headerLayout != null) {
+            canvas.save()
+            canvas.translate(textBoxLeft + pad, currentY)
+            headerLayout.draw(canvas)
+            canvas.restore()
+            currentY += headerLayout.height + headerBodyGap
+        }
         canvas.save()
-        canvas.translate(textLeft, textTop)
-        staticLayout.draw(canvas)
+        canvas.translate(textBoxLeft + pad, currentY)
+        bodyLayout.draw(canvas)
         canvas.restore()
     }
 
-    private fun centerCropRect(w: Int, h: Int): Rect {
-        val size = minOf(w, h)
-        val x = (w - size) / 2
-        val y = (h - size) / 2
-        return Rect(x, y, x + size, y + size)
+    private fun centerCropRect(srcW: Int, srcH: Int, dstW: Float, dstH: Float): Rect {
+        val dstRatio = dstW / dstH
+        val srcRatio = srcW.toFloat() / srcH.toFloat()
+        return if (srcRatio > dstRatio) {
+            val newW = (srcH * dstRatio).roundToInt().coerceAtMost(srcW)
+            val x = (srcW - newW) / 2
+            Rect(x, 0, x + newW, srcH)
+        } else {
+            val newH = (srcW / dstRatio).roundToInt().coerceAtMost(srcH)
+            val y = (srcH - newH) / 2
+            Rect(0, y, srcW, y + newH)
+        }
     }
 
     private fun compressToLimit(source: Bitmap, qualityMode: String): ByteArray {
