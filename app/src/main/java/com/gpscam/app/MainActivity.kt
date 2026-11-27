@@ -5,7 +5,6 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
-import android.location.Geocoder
 import android.net.Uri
 import android.os.Bundle
 import android.os.Looper
@@ -113,6 +112,7 @@ fun GpsCameraScreen() {
 
     val activeLat = lockedLat ?: liveLat
     val activeLng = lockedLng ?: liveLng
+    val activeAddress = fixedAddress.ifBlank { autoAddress }
 
     // Camera states
     var lensFacing by remember { mutableIntStateOf(CameraSelector.LENS_FACING_BACK) }
@@ -131,7 +131,7 @@ fun GpsCameraScreen() {
         }
     }
 
-    // Optional gallery picker for map thumbnail
+    // Pick custom map thumbnail
     val mapPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri != null) {
             scope.launch(Dispatchers.IO) {
@@ -139,6 +139,42 @@ fun GpsCameraScreen() {
                     mapThumbFile.outputStream().use { output -> input.copyTo(output) }
                 }
                 withContext(Dispatchers.Main) { mapVersion++ }
+            }
+        }
+    }
+
+    // Pick an existing gallery photo to geo-tag
+    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        if (uri != null && !isSaving) {
+            isSaving = true
+            scope.launch(Dispatchers.IO) {
+                val tempFile = File(context.cacheDir, "upload_${System.currentTimeMillis()}.jpg")
+                val copied = try {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        tempFile.outputStream().use { output -> input.copyTo(output) }
+                    }
+                    true
+                } catch (_: Exception) {
+                    false
+                }
+
+                val ok = if (copied) {
+                    ImageStamper.stampAndSave(
+                        context,
+                        tempFile,
+                        StampData(title, activeAddress, activeLat, activeLng, note),
+                        mapThumbFile
+                    )
+                } else false
+
+                withContext(Dispatchers.Main) {
+                    isSaving = false
+                    Toast.makeText(
+                        context,
+                        if (ok) "Geo-tagged photo saved to Pictures/GPSCamera" else "Failed to stamp photo",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
             }
         }
     }
@@ -199,7 +235,6 @@ fun GpsCameraScreen() {
         return
     }
 
-    val activeAddress = fixedAddress.ifBlank { autoAddress }
     val mapBitmap = remember(mapVersion) {
         if (mapThumbFile.exists()) BitmapFactory.decodeFile(mapThumbFile.absolutePath)?.asImageBitmap() else null
     }
@@ -237,7 +272,7 @@ fun GpsCameraScreen() {
             }
         }
 
-        // Bottom Live Overlay + Shutter
+        // Bottom Live Overlay + Controls
         Column(
             Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(14.dp),
             horizontalAlignment = Alignment.CenterHorizontally
@@ -287,50 +322,67 @@ fun GpsCameraScreen() {
 
             Spacer(Modifier.height(18.dp))
 
-            // Shutter Button
-            Box(
-                Modifier
-                    .size(72.dp)
-                    .clip(CircleShape)
-                    .border(4.dp, Color.White, CircleShape)
-                    .padding(6.dp)
-                    .clip(CircleShape)
-                    .background(if (isSaving) Color(0xFF38BDF8) else Color.White)
-                    .clickable(enabled = !isSaving) {
-                        val capture = imageCapture ?: return@clickable
-                        isSaving = true
-                        val tempFile = File(context.cacheDir, "raw_${System.currentTimeMillis()}.jpg")
-                        val opts = ImageCapture.OutputFileOptions.Builder(tempFile).build()
-                        capture.takePicture(
-                            opts,
-                            ContextCompat.getMainExecutor(context),
-                            object : ImageCapture.OnImageSavedCallback {
-                                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                                    scope.launch(Dispatchers.IO) {
-                                        val ok = ImageStamper.stampAndSave(
-                                            context,
-                                            tempFile,
-                                            StampData(title, activeAddress, activeLat, activeLng, note),
-                                            mapThumbFile
-                                        )
-                                        withContext(Dispatchers.Main) {
-                                            isSaving = false
-                                            Toast.makeText(
+            // Controls Row: Gallery Upload + Shutter
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                // Gallery Upload Button (Left)
+                IconButton(
+                    enabled = !isSaving,
+                    onClick = { photoPicker.launch("image/*") },
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = 24.dp)
+                        .size(52.dp)
+                        .background(Color(0xCC0F172A), CircleShape)
+                        .border(1.5.dp, Color(0xFF38BDF8), CircleShape)
+                ) {
+                    Icon(Icons.Default.PhotoLibrary, "Geo-tag Gallery Photo", tint = Color.White)
+                }
+
+                // Shutter Button (Center)
+                Box(
+                    Modifier
+                        .size(72.dp)
+                        .clip(CircleShape)
+                        .border(4.dp, Color.White, CircleShape)
+                        .padding(6.dp)
+                        .clip(CircleShape)
+                        .background(if (isSaving) Color(0xFF38BDF8) else Color.White)
+                        .clickable(enabled = !isSaving) {
+                            val capture = imageCapture ?: return@clickable
+                            isSaving = true
+                            val tempFile = File(context.cacheDir, "raw_${System.currentTimeMillis()}.jpg")
+                            val opts = ImageCapture.OutputFileOptions.Builder(tempFile).build()
+                            capture.takePicture(
+                                opts,
+                                ContextCompat.getMainExecutor(context),
+                                object : ImageCapture.OnImageSavedCallback {
+                                    override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                                        scope.launch(Dispatchers.IO) {
+                                            val ok = ImageStamper.stampAndSave(
                                                 context,
-                                                if (ok) "Saved to Pictures/GPSCamera" else "Save failed",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
+                                                tempFile,
+                                                StampData(title, activeAddress, activeLat, activeLng, note),
+                                                mapThumbFile
+                                            )
+                                            withContext(Dispatchers.Main) {
+                                                isSaving = false
+                                                Toast.makeText(
+                                                    context,
+                                                    if (ok) "Saved to Pictures/GPSCamera" else "Save failed",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
                                         }
                                     }
+                                    override fun onError(e: ImageCaptureException) {
+                                        isSaving = false
+                                        Toast.makeText(context, "Capture error: ${e.message}", Toast.LENGTH_SHORT).show()
+                                    }
                                 }
-                                override fun onError(e: ImageCaptureException) {
-                                    isSaving = false
-                                    Toast.makeText(context, "Capture error: ${e.message}", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        )
-                    }
-            )
+                            )
+                        }
+                )
+            }
         }
     }
 
