@@ -59,12 +59,53 @@ object ImageStamper {
         val canvas = Canvas(bitmap)
         val w = bitmap.width.toFloat()
         val h = bitmap.height.toFloat()
+        val base = minOf(w, h)
+
         val margin = w * 0.03f
-        val cardHeight = h * 0.17f
+        val pad = base * 0.025f
+        val mapSize = base * 0.22f
+        val cornerRadius = base * 0.025f
+
+        val textLeft = margin + pad + mapSize + pad
+        val textWidth = (w - margin - pad - textLeft).toInt().coerceAtLeast(100)
+
+        val timestamp = SimpleDateFormat("dd/MM/yyyy hh:mm:ss a 'GMT'XXX", Locale.getDefault()).format(Date())
+        val coords = if (data.latitude != null && data.longitude != null) {
+            String.format(Locale.US, "Lat %.6f°  Long %.6f°", data.latitude, data.longitude)
+        } else {
+            "Lat --  Long --"
+        }
+
+        val lines = buildString {
+            if (data.title.isNotBlank()) appendLine(data.title)
+            appendLine(data.address.ifBlank { "Location not set" })
+            appendLine(coords)
+            append(timestamp)
+            if (data.note.isNotBlank()) append("\n${data.note}")
+        }
+
+        val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = base * 0.030f
+            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
+            setShadowLayer(2f, 1f, 1f, Color.BLACK)
+        }
+
+        // 1. Measure text first
+        val staticLayout = StaticLayout.Builder
+            .obtain(lines, 0, lines.length, textPaint, textWidth)
+            .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+            .setLineSpacing(base * 0.006f, 1.05f)
+            .setMaxLines(12)
+            .build()
+
+        // 2. Auto-adjust card height to fit text or map (whichever is taller)
+        val contentHeight = maxOf(mapSize, staticLayout.height.toFloat())
+        val cardHeight = contentHeight + (pad * 2)
         val cardTop = h - cardHeight - margin
         val cardRect = RectF(margin, cardTop, w - margin, h - margin)
 
-        // Dark slate translucent card
+        // 3. Draw dark slate translucent card
         val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.argb(215, 15, 23, 42)
             style = Paint.Style.FILL
@@ -72,17 +113,15 @@ object ImageStamper {
         val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.argb(140, 100, 116, 139)
             style = Paint.Style.STROKE
-            strokeWidth = w * 0.003f
+            strokeWidth = base * 0.003f
         }
-        val cornerRadius = w * 0.025f
         canvas.drawRoundRect(cardRect, cornerRadius, cornerRadius, bgPaint)
         canvas.drawRoundRect(cardRect, cornerRadius, cornerRadius, borderPaint)
 
-        val pad = cardHeight * 0.1f
-        val mapSize = cardHeight - (pad * 2)
-        val mapRect = RectF(cardRect.left + pad, cardRect.top + pad, cardRect.left + pad + mapSize, cardRect.bottom - pad)
+        // 4. Draw map thumbnail vertically centered on the left
+        val mapTop = cardRect.top + (cardHeight - mapSize) / 2f
+        val mapRect = RectF(cardRect.left + pad, mapTop, cardRect.left + pad + mapSize, mapTop + mapSize)
 
-        // Draw saved map thumbnail or fallback box
         val mapBitmap = if (mapThumbFile != null && mapThumbFile.exists()) {
             BitmapFactory.decodeFile(mapThumbFile.absolutePath)
         } else null
@@ -107,40 +146,10 @@ object ImageStamper {
             canvas.drawText("MAP", mapRect.centerX(), mapRect.centerY() + labelPaint.textSize / 3f, labelPaint)
         }
 
-        // Text block on the right
-        val textLeft = mapRect.right + pad
-        val textWidth = (cardRect.right - pad - textLeft).toInt().coerceAtLeast(100)
-        val timestamp = SimpleDateFormat("dd/MM/yyyy hh:mm:ss a 'GMT'XXX", Locale.getDefault()).format(Date())
-        val coords = if (data.latitude != null && data.longitude != null) {
-            String.format(Locale.US, "Lat %.6f°  Long %.6f°", data.latitude, data.longitude)
-        } else {
-            "Lat --  Long --"
-        }
-
-        val lines = buildString {
-            if (data.title.isNotBlank()) appendLine(data.title)
-            appendLine(data.address.ifBlank { "Location not set" })
-            appendLine(coords)
-            append(timestamp)
-            if (data.note.isNotBlank()) append("\n${data.note}")
-        }
-
-        val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            textSize = cardHeight * 0.135f
-            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
-            setShadowLayer(2f, 1f, 1f, Color.BLACK)
-        }
-
-        val staticLayout = StaticLayout.Builder
-            .obtain(lines, 0, lines.length, textPaint, textWidth)
-            .setAlignment(Layout.Alignment.ALIGN_NORMAL)
-            .setLineSpacing(4f, 1.05f)
-            .setMaxLines(6)
-            .build()
-
+        // 5. Draw text block vertically centered on the right
+        val textTop = cardRect.top + (cardHeight - staticLayout.height) / 2f
         canvas.save()
-        canvas.translate(textLeft, cardRect.top + pad)
+        canvas.translate(textLeft, textTop)
         staticLayout.draw(canvas)
         canvas.restore()
     }
