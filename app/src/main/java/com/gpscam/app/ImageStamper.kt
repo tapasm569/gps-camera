@@ -233,9 +233,27 @@ object ImageStamper {
         val badgeTextWidth = badgeTextPaint.measureText(appName)
         val badgeWidth = badgePadH + iconSize + iconGap + badgeTextWidth + badgePadH
         val badgeHeight = iconSize + badgePadV * 2
-        val badgeRect = RectF(textBoxRight - badgeWidth, boxTop - badgeHeight, textBoxRight, boxTop + cornerRadius)
+        val badgeRect = RectF(textBoxRight - badgeWidth, boxTop - badgeHeight, textBoxRight, boxTop)
+        val textBoxRect = RectF(textBoxLeft, boxTop, textBoxRight, boxBottom)
 
-        canvas.drawRoundRect(badgeRect, cornerRadius * 0.8f, cornerRadius * 0.8f, bgPaint)
+        // Merge badge + text box into one seamless shape (no double-opacity seam)
+        val br = cornerRadius * 0.75f
+        val badgePath = Path().apply {
+            addRoundRect(
+                RectF(badgeRect.left, badgeRect.top, badgeRect.right, boxTop + cornerRadius),
+                floatArrayOf(br, br, br, br, 0f, 0f, 0f, 0f),
+                Path.Direction.CW
+            )
+        }
+        val textBoxPath = Path().apply {
+            addRoundRect(
+                textBoxRect,
+                floatArrayOf(cornerRadius, cornerRadius, 0f, 0f, cornerRadius, cornerRadius, cornerRadius, cornerRadius),
+                Path.Direction.CW
+            )
+        }
+        badgePath.op(textBoxPath, Path.Op.UNION)
+        canvas.drawPath(badgePath, bgPaint)
 
         val appIcon = BitmapFactory.decodeResource(context.resources, R.drawable.ic_launcher)
         if (appIcon != null) {
@@ -256,10 +274,6 @@ object ImageStamper {
         val fm = badgeTextPaint.fontMetrics
         val badgeTextY = badgeRect.top + badgePadV + iconSize / 2f - (fm.ascent + fm.descent) / 2f
         canvas.drawText(appName, badgeRect.left + badgePadH + iconSize + iconGap, badgeTextY, badgeTextPaint)
-
-        // 3. Draw Text Box on the right
-        val textBoxRect = RectF(textBoxLeft, boxTop, textBoxRight, boxBottom)
-        canvas.drawRoundRect(textBoxRect, cornerRadius, cornerRadius, bgPaint)
 
         // Draw Header & Body vertically centered
         var currentY = boxTop + (boxHeight - totalTextHeight) / 2f
