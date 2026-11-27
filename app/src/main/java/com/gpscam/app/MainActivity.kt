@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import android.location.Location
 import android.net.Uri
 import android.os.Bundle
 import android.os.Looper
@@ -97,21 +98,27 @@ fun GpsCameraScreen() {
         }
     }
 
-    // Saved settings (including optional locked Lat/Long)
+    // Saved manual overrides (leave blank for automatic GPS mode)
     var title by remember { mutableStateOf(prefs.getString("title", "") ?: "") }
     var fixedAddress by remember { mutableStateOf(prefs.getString("address", "") ?: "") }
     var note by remember { mutableStateOf(prefs.getString("note", "") ?: "") }
     var lockedLat by remember { mutableStateOf(prefs.getString("locked_lat", null)?.toDoubleOrNull()) }
     var lockedLng by remember { mutableStateOf(prefs.getString("locked_lng", null)?.toDoubleOrNull()) }
 
-    var autoAddress by remember { mutableStateOf("Fetching address...") }
+    // Auto-fetched live values
+    var autoTitle by remember { mutableStateOf("") }
+    var autoAddress by remember { mutableStateOf("Fetching location...") }
     var liveLat by remember { mutableStateOf<Double?>(null) }
     var liveLng by remember { mutableStateOf<Double?>(null) }
+    var lastAutoLat by remember { mutableStateOf<Double?>(null) }
+    var lastAutoLng by remember { mutableStateOf<Double?>(null) }
+
     var mapVersion by remember { mutableIntStateOf(0) }
     var showSettings by remember { mutableStateOf(false) }
 
     val activeLat = lockedLat ?: liveLat
     val activeLng = lockedLng ?: liveLng
+    val activeTitle = title.ifBlank { autoTitle }
     val activeAddress = fixedAddress.ifBlank { autoAddress }
 
     // Camera states
@@ -162,7 +169,7 @@ fun GpsCameraScreen() {
                     ImageStamper.stampAndSave(
                         context,
                         tempFile,
-                        StampData(title, activeAddress, activeLat, activeLng, note),
+                        StampData(activeTitle, activeAddress, activeLat, activeLng, note),
                         mapThumbFile
                     )
                 } else false
@@ -179,8 +186,8 @@ fun GpsCameraScreen() {
         }
     }
 
-    // Live GPS updates
-    DisposableEffect(hasPermissions) {
+    // Live GPS updates -> auto-fetch Header, Address, and Map Tile
+    DisposableEffect(hasPermissions, lockedLat, lockedLng) {
         if (!hasPermissions) return@DisposableEffect onDispose {}
         val client = LocationServices.getFusedLocationProviderClient(context)
         val req = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000L).build()
@@ -189,11 +196,29 @@ fun GpsCameraScreen() {
                 val loc = res.lastLocation ?: return
                 liveLat = loc.latitude
                 liveLng = loc.longitude
-                if (fixedAddress.isBlank() && lockedLat == null) {
+
+                if (lockedLat != null && lockedLng != null) return
+
+                val movedEnough = if (lastAutoLat == null || lastAutoLng == null) {
+                    true
+                } else {
+                    val dist = FloatArray(1)
+                    Location.distanceBetween(lastAutoLat!!, lastAutoLng!!, loc.latitude, loc.longitude, dist)
+                    dist[0] > 50f
+                }
+
+                if (movedEnough) {
+                    lastAutoLat = loc.latitude
+                    lastAutoLng = loc.longitude
                     scope.launch(Dispatchers.IO) {
-                        val addr = MapTileHelper.fetchAddress(context, loc.latitude, loc.longitude)
-                        if (!addr.isNullOrBlank()) {
-                            withContext(Dispatchers.Main) { autoAddress = addr }
+                        val geo = MapTileHelper.fetchGeoDetails(context, loc.latitude, loc.longitude)
+                        val tileOk = MapTileHelper.downloadMapTile(loc.latitude, loc.longitude, mapThumbFile)
+                        withContext(Dispatchers.Main) {
+                            if (geo != null) {
+                                autoTitle = geo.header
+                                autoAddress = geo.fullAddress
+                            }
+                            if (tileOk) mapVersion++
                         }
                     }
                 }
@@ -303,8 +328,8 @@ fun GpsCameraScreen() {
                 }
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
-                    if (title.isNotBlank()) {
-                        Text(title, color = Color(0xFF38BDF8), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    if (activeTitle.isNotBlank()) {
+                        Text(activeTitle, color = Color(0xFF38BDF8), fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
                     Text(activeAddress, color = Color.White, fontSize = 12.sp, maxLines = 2)
                     Text(
@@ -324,7 +349,6 @@ fun GpsCameraScreen() {
 
             // Controls Row: Gallery Upload + Shutter
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                // Gallery Upload Button (Left)
                 IconButton(
                     enabled = !isSaving,
                     onClick = { photoPicker.launch("image/*") },
@@ -338,7 +362,6 @@ fun GpsCameraScreen() {
                     Icon(Icons.Default.PhotoLibrary, "Geo-tag Gallery Photo", tint = Color.White)
                 }
 
-                // Shutter Button (Center)
                 Box(
                     Modifier
                         .size(72.dp)
@@ -361,7 +384,7 @@ fun GpsCameraScreen() {
                                             val ok = ImageStamper.stampAndSave(
                                                 context,
                                                 tempFile,
-                                                StampData(title, activeAddress, activeLat, activeLng, note),
+                                                StampData(activeTitle, activeAddress, activeLat, activeLng, note),
                                                 mapThumbFile
                                             )
                                             withContext(Dispatchers.Main) {
@@ -401,7 +424,7 @@ fun GpsCameraScreen() {
                     OutlinedTextField(
                         value = title,
                         onValueChange = { title = it },
-                        label = { Text("Header / Place Name") },
+                        label = { Text("Header (blank = auto)") },
                         singleLine = true
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -431,17 +454,20 @@ fun GpsCameraScreen() {
                             }
                             isFetching = true
                             scope.launch(Dispatchers.IO) {
-                                val fetchedAddr = MapTileHelper.fetchAddress(context, parsedLat, parsedLng)
+                                val geo = MapTileHelper.fetchGeoDetails(context, parsedLat, parsedLng)
                                 val tileOk = MapTileHelper.downloadMapTile(parsedLat, parsedLng, mapThumbFile)
                                 withContext(Dispatchers.Main) {
                                     isFetching = false
                                     lockedLat = parsedLat
                                     lockedLng = parsedLng
-                                    if (!fetchedAddr.isNullOrBlank()) fixedAddress = fetchedAddr
+                                    if (geo != null) {
+                                        title = geo.header
+                                        fixedAddress = geo.fullAddress
+                                    }
                                     if (tileOk) mapVersion++
                                     Toast.makeText(
                                         context,
-                                        if (tileOk) "Address & Map updated" else "Address updated (map failed)",
+                                        if (tileOk) "Header, Address & Map updated" else "Address updated (map failed)",
                                         Toast.LENGTH_SHORT
                                     ).show()
                                 }
@@ -449,12 +475,12 @@ fun GpsCameraScreen() {
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text(if (isFetching) "Fetching..." else "Fetch Address & Map from Lat/Long")
+                        Text(if (isFetching) "Fetching..." else "Fetch Header, Address & Map")
                     }
                     OutlinedTextField(
                         value = fixedAddress,
                         onValueChange = { fixedAddress = it },
-                        label = { Text("Address (auto-filled or edit)") },
+                        label = { Text("Address (blank = auto)") },
                         maxLines = 3
                     )
                     OutlinedTextField(
@@ -463,11 +489,34 @@ fun GpsCameraScreen() {
                         label = { Text("Footer Note (optional)") },
                         singleLine = true
                     )
-                    OutlinedButton(
-                        onClick = { mapPicker.launch("image/*") },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Or Pick Custom Map Image")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { mapPicker.launch("image/*") },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Pick Map", fontSize = 12.sp)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                lockedLat = null
+                                lockedLng = null
+                                title = ""
+                                fixedAddress = ""
+                                lastAutoLat = null
+                                lastAutoLng = null
+                                prefs.edit()
+                                    .remove("locked_lat")
+                                    .remove("locked_lng")
+                                    .remove("title")
+                                    .remove("address")
+                                    .apply()
+                                Toast.makeText(context, "Switched to Auto Live GPS", Toast.LENGTH_SHORT).show()
+                                showSettings = false
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Reset Auto", fontSize = 12.sp)
+                        }
                     }
                 }
             },

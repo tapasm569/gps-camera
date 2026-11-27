@@ -9,13 +9,26 @@ import java.net.URL
 import java.util.Locale
 import kotlin.math.*
 
+data class GeoResult(
+    val header: String,
+    val fullAddress: String
+)
+
 object MapTileHelper {
 
-    fun fetchAddress(context: Context, lat: Double, lng: Double): String? {
+    fun fetchGeoDetails(context: Context, lat: Double, lng: Double): GeoResult? {
         return try {
             @Suppress("DEPRECATION")
-            val list = Geocoder(context, Locale.getDefault()).getFromLocation(lat, lng, 1)
-            list?.firstOrNull()?.getAddressLine(0)
+            val addr = Geocoder(context, Locale.getDefault()).getFromLocation(lat, lng, 1)?.firstOrNull()
+                ?: return null
+
+            val city = addr.locality ?: addr.subAdminArea ?: addr.featureName ?: ""
+            val state = addr.adminArea ?: ""
+            val country = addr.countryName ?: ""
+            val header = listOf(city, state, country).filter { it.isNotBlank() }.joinToString(", ")
+            val fullAddress = addr.getAddressLine(0) ?: header
+
+            GeoResult(header = header, fullAddress = fullAddress)
         } catch (_: Exception) {
             null
         }
