@@ -103,18 +103,18 @@ object ImageStamper {
 
         val margin = w * 0.03f
         val gap = w * 0.02f
-        val pad = base * 0.026f
-        val mapWidth = w * 0.26f
+        val pad = base * 0.018f
+        val mapWidth = w * 0.25f
         val cornerRadius = base * 0.018f
 
         val textBoxLeft = margin + mapWidth + gap
         val textBoxRight = w - margin
         val textWidth = (textBoxRight - textBoxLeft - pad * 2).toInt().coerceAtLeast(100)
 
-        // Larger Header Paint (~1.6x body)
+        // Larger Header Paint
         val headerPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
-            textSize = base * 0.044f
+            textSize = base * 0.041f
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
             setShadowLayer(2f, 1f, 1f, Color.BLACK)
         }
@@ -122,7 +122,7 @@ object ImageStamper {
         // Body Paint
         val bodyPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
-            textSize = base * 0.027f
+            textSize = base * 0.026f
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
             setShadowLayer(2f, 1f, 1f, Color.BLACK)
         }
@@ -132,7 +132,8 @@ object ImageStamper {
             StaticLayout.Builder
                 .obtain(headerText, 0, headerText.length, headerPaint, textWidth)
                 .setAlignment(Layout.Alignment.ALIGN_NORMAL)
-                .setLineSpacing(base * 0.004f, 1.05f)
+                .setLineSpacing(0f, 0.98f)
+                .setIncludePad(false)
                 .setMaxLines(3)
                 .build()
         } else null
@@ -154,13 +155,14 @@ object ImageStamper {
         val bodyLayout = StaticLayout.Builder
             .obtain(bodyText, 0, bodyText.length, bodyPaint, textWidth)
             .setAlignment(Layout.Alignment.ALIGN_NORMAL)
-            .setLineSpacing(base * 0.006f, 1.08f)
+            .setLineSpacing(0f, 0.98f)
+            .setIncludePad(false)
             .setMaxLines(10)
             .build()
 
-        val headerBodyGap = if (headerLayout != null) base * 0.012f else 0f
+        val headerBodyGap = if (headerLayout != null) base * 0.005f else 0f
         val totalTextHeight = (headerLayout?.height ?: 0) + headerBodyGap + bodyLayout.height
-        val boxHeight = maxOf(mapWidth, totalTextHeight + pad * 2)
+        val boxHeight = maxOf(mapWidth * 0.85f, totalTextHeight + pad * 2)
         val boxTop = h - boxHeight - margin
         val boxBottom = h - margin
 
@@ -181,6 +183,29 @@ object ImageStamper {
             canvas.clipPath(clipPath)
             val src = centerCropRect(mapBitmap.width, mapBitmap.height, mapRect.width(), mapRect.height())
             canvas.drawBitmap(mapBitmap, src, mapRect, Paint(Paint.FILTER_BITMAP_FLAG))
+
+            // Draw "Google" centered at bottom of mapRect (never clipped)
+            val gTextSize = mapRect.width() * 0.21f
+            val gY = mapRect.bottom - mapRect.height() * 0.09f
+            val gStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.argb(220, 20, 20, 20)
+                textSize = gTextSize
+                textAlign = Paint.Align.CENTER
+                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                style = Paint.Style.STROKE
+                strokeWidth = mapRect.width() * 0.03f
+                strokeJoin = Paint.Join.ROUND
+            }
+            val gFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.WHITE
+                textSize = gTextSize
+                textAlign = Paint.Align.CENTER
+                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                style = Paint.Style.FILL
+            }
+            canvas.drawText("Google", mapRect.centerX(), gY, gStroke)
+            canvas.drawText("Google", mapRect.centerX(), gY, gFill)
+
             canvas.restoreToCount(saveCount)
             mapBitmap.recycle()
         } else {
@@ -198,13 +223,13 @@ object ImageStamper {
         val appName = "GPS Camera"
         val badgeTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
-            textSize = base * 0.025f
+            textSize = base * 0.024f
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
         }
-        val badgePadH = base * 0.018f
-        val badgePadV = base * 0.010f
-        val iconSize = base * 0.032f
-        val iconGap = base * 0.012f
+        val badgePadH = base * 0.016f
+        val badgePadV = base * 0.008f
+        val iconSize = base * 0.030f
+        val iconGap = base * 0.010f
         val badgeTextWidth = badgeTextPaint.measureText(appName)
         val badgeWidth = badgePadH + iconSize + iconGap + badgeTextWidth + badgePadH
         val badgeHeight = iconSize + badgePadV * 2

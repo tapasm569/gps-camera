@@ -50,7 +50,7 @@ object MapTileHelper {
             val latRad = Math.toRadians(lat)
             val y = floor((1.0 - ln(tan(latRad) + 1.0 / cos(latRad)) / PI) / 2.0 * n).toInt()
 
-            // Esri World Imagery Satellite Tile (uses z/y/x order)
+            // Esri World Imagery Satellite Tile (z/y/x order)
             val url = URL("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/$zoom/$y/$x")
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 setRequestProperty("User-Agent", "GPSCameraApp/1.0")
@@ -91,28 +91,6 @@ object MapTileHelper {
             }
             canvas.drawPath(pinPath, pinPaint)
             canvas.drawCircle(cx, headCy, r * 0.38f, innerDotPaint)
-
-            // Draw "Google" text near bottom of map tile
-            val textSize = w * 0.17f
-            val textX = w * 0.08f
-            val textY = h * 0.88f
-
-            val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.argb(220, 20, 20, 20)
-                this.textSize = textSize
-                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-                style = Paint.Style.STROKE
-                strokeWidth = w * 0.025f
-                strokeJoin = Paint.Join.ROUND
-            }
-            val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.WHITE
-                this.textSize = textSize
-                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-                style = Paint.Style.FILL
-            }
-            canvas.drawText("Google", textX, textY, strokePaint)
-            canvas.drawText("Google", textX, textY, fillPaint)
 
             outputFile.outputStream().use { out ->
                 mutable.compress(Bitmap.CompressFormat.PNG, 100, out)
